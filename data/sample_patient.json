@@ -1,0 +1,15 @@
+{
+    "age": 45,
+    "gender": "F",
+    "diagnosis_codes": [
+        "E11.9"
+    ],
+    "procedure_codes": [],
+    "prior_treatments": [
+        "metformin"
+    ],
+    "imaging_reports": [],
+    "medications": [
+        "metformin"
+    ]
+}
