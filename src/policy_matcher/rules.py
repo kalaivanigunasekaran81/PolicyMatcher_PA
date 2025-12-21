@@ -34,7 +34,18 @@ class RuleEngine:
         # Helper for logic evaluation
         # SAFETY: logic_expression comes from trusted internal extraction (mocked here), 
         # but broadly `eval` is dangerous. In production, use a safe expression parser.
-        def safe_eval(expr: str, ctx: dict) -> bool:
+        def safe_eval(expr: str, ctx: dict) -> str:
+            """
+            Evaluates logic expression. Returns 'PASS', 'FAIL', or 'PEND'.
+            """
+            # Handle known placeholders
+            if expr == "manual_review_required":
+                return "PEND"
+            if expr == "diagnosis_check_required":
+                # Provisional check: if we have diagnosis codes, maybe we can't fully check without complex logic
+                # For now, treat as PEND
+                return "PEND"
+
             try:
                 # Basic whitelist filtering for prototype safety
                 allowed_names = set(ctx.keys())
@@ -43,22 +54,17 @@ class RuleEngine:
                     if name not in allowed_names and name not in ('len', 'any', 'all', 'set'):
                         # Very crude check. Ideally use AST parsing.
                         pass 
-                return eval(expr, {"__builtins__": {}}, ctx)
+                result = eval(expr, {"__builtins__": {}}, ctx)
+                return "PASS" if result else "FAIL"
             except Exception as e:
                 print(f"Error evaluating rule: {expr} -> {e}")
-                return False
+                return "FAIL"
 
         for rule in rules:
             # Check if we have data for the rule first? 
             # In this simple engine, we assume logic_expression maps to schema keys
             
-            passed = False
-            try:
-                passed = safe_eval(rule.logic_expression, context)
-            except:
-                pass # Default fail handling
-            
-            status = "PASS" if passed else "FAIL"
+            status = safe_eval(rule.logic_expression, context)
             
             result = EvaluationResult(
                 rule_id=rule.id,
@@ -69,6 +75,8 @@ class RuleEngine:
             
             if status == "FAIL" and rule.required:
                 failed_rules.append(result)
+            elif status == "PEND":
+                missing_info.append(result)
 
         # Aggregation Logic
         if not failed_rules and not missing_info:

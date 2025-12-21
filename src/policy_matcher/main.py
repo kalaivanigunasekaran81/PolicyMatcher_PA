@@ -1,7 +1,7 @@
 import argparse
 import json
 import os
-from .ingestion import PolicyRetriever
+from .pipeline.indexing import RuleIndexer
 from .patient import normalize_features
 from .rules import RuleEngine, Rule
 from .llm_utils import MockLLM
@@ -13,14 +13,10 @@ def main():
     parser.add_argument("--demo", action="store_true", help="Run with demo data")
     args = parser.parse_args()
 
-    # 1. Setup / Ingestion
     # 1. Setup
     print("Initializing components...")
-    retriever = PolicyRetriever(host="localhost", port=9200)
-
-    # Note: Ingestion is now handled by run_ingestion.py (offline).
-    # ensure we have an index available for search logic later.
- 
+    # Using the new RuleIndexer
+    indexer = RuleIndexer(index_name="clinical_rules")
 
     # 2. Patient Data
     if args.demo and not os.path.exists(args.patient):
@@ -38,32 +34,31 @@ def main():
     patient = normalize_features(raw_patient)
     print(f"Patient normalized: {patient}")
 
-    # 3. Retrieve Rules (Simulated Extraction)
-    # Ideally: Retrieve text chunks -> LLM extracts Rules -> Engine Eval
-    # Prototype shortcut: We will define HARDCODED rules that 'would have been' extracted 
-    # from a Knee Arthroplasty policy for the demo, to prove the ENGINE works.
-    
+    # 3. Retrieve Rules (Dynamic)
     print("Retrieving relevant rules...")
-    # retrieval_results = retriever.search("Eligibility for Knee Arthroplasty")
-    # For the purpose of the PROTOTYPE, we manually construct the 'Extracted' rules 
-    # as if the LLM parsed them from the text.
     
-    rules = [
-        Rule(
-            id="R-EL-01",
-            type="Eligibility",
-            logic_expression="age >= 18",
-            description="Patient must be 18 years or older",
-            required=True
-        ),
-        Rule(
-            id="R-MN-01",
-            type="MedicalNecessity",
-            logic_expression="'M17.11' in diagnosis_codes",
-            description="Diagnosis must be Osteoarthritis of knee",
-            required=True
-        )
-    ]
+    # In a real scenario, we'd search for rules specific to the procedure
+    # For this demo, we want to run ALL rules we just ingested, or a broad search
+    # query = f"Rules for {patient.procedure_codes[0]}"  # Too specific if rules don't mention procedure code explicitly
+    query = "diabetes eligibility medical necessity" # Broad search to pull back our test rules
+    
+    rules_data = indexer.search(query, k=50)
+    print(f"Retrieved {len(rules_data)} potentially relevant rules.")
+    
+    rules = []
+    for r_data in rules_data:
+        # Convert dict back to Rule object
+        # Note: RuleIndexer.search returns dicts with 'id', 'logic', 'description', 'type'
+        # We need to reconstruct the Rule object. 
+        # CAUTION: The Rule model expects 'logic_expression', search result has 'logic'
+        rules.append(Rule(
+            id=r_data["id"],
+            type=r_data["type"],
+            logic_expression=r_data["logic"],
+            description=r_data["description"],
+            required=True, # Defaulting to True for now as metadata might not be full
+            parent_policy_id="unknown"
+        ))
     
     # 4. Evaluation
     print("Evaluating rules...")

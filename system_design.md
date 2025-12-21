@@ -1,80 +1,70 @@
-# System Design: Policy Matcher (Decision Support System)
+# Policy Matcher System Design
 
-This document outlines the architecture for the Policy Matcher system, a prototype for automating Prior Authorization (PA) decisions using policy documents and patient data.
+## Architecture Overview
 
-## High-Level Architecture
-
-The system is designed as a Retrieval-Augmented Generation (RAG) pipeline combined with a deterministic Rule Engine. It consists of two main workflows:
-1. **Ingestion Pipeline**: Pre-processing policy documents into retrievable chunks.
-2. **Decision Pipeline**: Evaluating patient data against policies to produce a decision with explanation.
-
-### Diagram
+The **Policy Matcher** system is designed to automate the evaluation of clinical policies against patient data. It consists of two distinct phases: an **Offline Ingestion Pipeline** and a **Runtime Decision Engine**.
 
 ```mermaid
 graph TD
-    subgraph "Ingestion Pipeline"
-        PDF[Policy PDF] --> Processor[PDFProcessor]
-        Processor -->|Raw Text| Chunker[PolicyChunker]
-        Chunker -->|Text Chunks| Embed[Sentence Transformer]
-        Embed -->|Vectors| VectorDB[(OpenSearch)]
+    subgraph "Offline Pipeline (Ingestion & Management)"
+        PDF[Clinical Policy PDF] --> Processor[PDF Processor]
+        Processor --> Text[Filtered Text]
+        Text --> Chunker[Smart Chunker]
+        Chunker -->|Exclusions, Med Necessity...| Mining[Rule Miner]
+        Mining --> RegistryDB[(Rule Registry JSON)]
+        
+        RegistryDB --> ReviewCLI[Review CLI]
+        ReviewCLI -->|Approve/Edit| RegistryDB
+        
+        RegistryDB -->|Approved Rules| Indexer[Rule Indexer]
+        Indexer --> VectorDB[(OpenSearch)]
     end
 
-    subgraph "Decision Pipeline"
-        User[User / Application] -->|Query + Patient JSON| Main[Main Controller]
+    subgraph "Runtime (Decision Support)"
+        Patient[Patient Data JSON] --> Normalizer[Data Normalizer]
+        Normalizer --> Engine[Rule Engine]
         
-        %% Retrieval Phase
-        Main -->|1. Query| Retriever[PolicyRetriever]
-        Retriever -->|Search Vectors| VectorDB
-        VectorDB -->|Relevant Chunks| LLM_Extract[LLM Rule Extractor]
-        LLM_Extract -->|2. Extracted Rules| Rules[Rule Definitions]
-
-        %% Data Normalization
-        Main -->|Patient JSON| Normalizer[Patient Normalizer]
-        Normalizer -->|3. Normalized Context| PatientObj[PatientContext]
-
-        %% Evaluation Phase
-        Rules --> Engine[Rule Engine]
-        PatientObj --> Engine
-        Engine -->|4. Pass/Fail Result| Result[Evaluation Result]
-        
-        %% Explanation Phase
-        Result --> LLM_Explain[LLM Explainer]
-        Rules --> LLM_Explain
-        PatientObj --> LLM_Explain
-        LLM_Explain -->|5. Explanation| FinalResponse[Final Decision API Response]
+        VectorDB -->|Search Relevant Rules| Engine
+        Engine -->|Evaluate Logic| Decision[Decision Result]
+        Decision --> Explainer[LLM Explainer]
+        Explainer --> FinalResponse[Final JSON Output]
     end
-
-    classDef storage fill:#f9f,stroke:#333,stroke-width:2px;
-    classDef logic fill:#bbf,stroke:#333,stroke-width:2px;
-    class VectorDB storage;
-    class Engine,LLM_Extract,LLM_Explain logic;
 ```
 
-## Component Details
+## Key Components
 
-### 1. Ingestion Layer
-- **PDFProcessor (`ingestion.py`)**: Extracts raw text from PDF files. Future versions will handle structure (headers, tables).
-- **PolicyChunker (`ingestion.py`)**: Splits text into logical units (e.g., paragraphs or list items).
-- **PolicyRetriever (`ingestion.py`)**: Uses `opensearch-py` and `sentence-transformers` (all-MiniLM-L6-v2) to index chunk embeddings into OpenSearch.
+### 1. Ingestion Pipeline (`src/policy_matcher/pipeline/`)
+Responsible for transforming unstructured PDF policies into structured, computable rules.
 
-### 2. Data Layer
-- **Patient Processing (`patient.py`)**: Normalizes disparate patient inputs (JSON) into a standard `PatientContext` model using Pydantic. Handles standardization of codes (ICD-10, CPT) and strings.
+*   **Ingestion (`ingestion.py`)**: 
+    *   Extracts metadata (Effective Date, Version).
+    *   Isolates the "Policy" section from the document.
+*   **Smart Chunking**: 
+    *   Splits text into numbered lists (e.g., "1.", "2(a)").
+    *   Classifies chunks into types: **Eligibility**, **Medical Necessity**, **Exclusions**, **Documentation**.
+*   **Rule Mining (`mining.py`)**: 
+    *   Converts text chunks into "Candidate Rules".
+    *   Proposed Logic: Heuristics or LLM-based extraction.
+*   **Rule Registry (`registry.py`)**: 
+    *   File-based storage (`data/rule_registry.json`) for managing Rule Lifecycle (`DRAFT` -> `APPROVED`).
+*   **Review (`review.py`)**: 
+    *   CLI tool for human-in-the-loop verification of draft rules.
+*   **Indexing (`indexing.py`)**: 
+    *   Indexes only `APPROVED` rules into OpenSearch.
+    *   Uses `sentence-transformers` for vector embeddings.
 
-### 3. Logic Layer
-- **Rule Engine (`rules.py`)**: A deterministic engine that evaluates `Rule` objects against the `PatientContext`.
-    - **Safety**: Uses a sandboxed `eval()` approach to execute logic expressions (e.g., `'M17.11' in diagnosis_codes`).
-    - **Output**: Returns detailed pass/fail status for each rule and an overall decision (APPROVE, DENY, PEND).
-- **LLM Integration (`llm_utils.py`)**:
-    - **MockLLM**: Currently used for the prototype to simulate responses without API costs.
-    - **Role**:
-        1.  **Rule Extraction**: (Planned) Parsing text chunks into executable `Rule` objects.
-        2.  **Explanation**: Generating human-readable rationale based on the Engine's structured results.
+### 2. Decision Runtime (`src/policy_matcher/main.py`)
+Responsible for evaluating a specific patient case against the indexed rules.
 
-## Data Flow Example (Demo)
+*   **Rule Engine**: 
+    *   Retrieves relevant rules from OpenSearch.
+    *   Executes `logic_expression` against patient data.
+    *   Handles `PEND` status for rules requiring manual review.
+*   **LLM Explainer**: 
+    *   Generates human-readable reasoning for the decision.
 
-1. **Input**: "Eligibility for Knee Arthroplasty" + Patient Age 17.
-2. **Retrieval**: System identifies chunks related to "Age requirements" and "Medical Necessity".
-3. **Extraction**: LLM (simulated) creates Rule `R-EL-01`: `age >= 18`.
-4. **Evaluation**: Engine checks `17 >= 18` -> **FAIL**.
-5. **Result**: Decision="DENY", Evidence="Patient age is 17".
-6. **Output**: JSON response with "DENY" and explanation.
+## Data Flow
+1.  **Ingest**: `run_pipeline.py` -> PDF processed into Draft Rules in Registry.
+2.  **Review**: Human approves rules via CLI.
+3.  **Index**: `run_indexing.py` -> Approved rules pushed to OpenSearch.
+4.  **Evaluate**: `main.py` -> Patient data matched against indexed rules.
