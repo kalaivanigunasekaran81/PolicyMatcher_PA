@@ -3,10 +3,15 @@ from pydantic import BaseModel, Field
 from .patient import PatientContext
 import re
 
+class RuleCondition(BaseModel):
+    parameter: str = Field(description="Variable to check, e.g. 'age', 'diagnosis'")
+    operator: str = Field(description="Operator: equals, gte, lte, one_of, contains")
+    value: Any = Field(description="Value to compare against")
+
 class Rule(BaseModel):
     id: str
     type: str = Field(description="Eligibility, MedicalNecessity, Exclusion, etc.")
-    logic_expression: str = Field(description="Executable logic string, e.g. 'age >= 18'")
+    conditions: List[RuleCondition] = Field(default_factory=list, description="List of conditions that must ALL match (AND logic)")
     description: str
     required: bool = True
     parent_policy_id: Optional[str] = None
@@ -34,48 +39,68 @@ class RuleEngine:
         # Helper for logic evaluation
         # SAFETY: logic_expression comes from trusted internal extraction (mocked here), 
         # but broadly `eval` is dangerous. In production, use a safe expression parser.
-        def safe_eval(expr: str, ctx: dict) -> str:
+        def evaluate_condition(cond: RuleCondition, ctx: dict) -> str:
             """
-            Evaluates logic expression. Returns 'PASS', 'FAIL', or 'PEND'.
+            Evaluates a single structured condition.
+            Returns 'PASS', 'FAIL', or 'PEND'.
             """
-            # Handle known placeholders
-            if expr == "manual_review_required":
+            param = cond.parameter
+            op = cond.operator
+            val = cond.value
+            
+            # 1. Check for manual review flag
+            if param == "manual_review":
                 return "PEND"
-            if expr == "diagnosis_check_required":
-                # Provisional check: if we have diagnosis codes, maybe we can't fully check without complex logic
-                # For now, treat as PEND
-                return "PEND"
-
+                
+            # 2. Check data availability
+            if param not in ctx:
+                return "PEND" # Missing data
+                
+            actual_value = ctx[param]
+            
             try:
-                # Basic whitelist filtering for prototype safety
-                allowed_names = set(ctx.keys())
-                code = compile(expr, "<string>", "eval")
-                for name in code.co_names:
-                    if name not in allowed_names and name not in ('len', 'any', 'all', 'set'):
-                        # Very crude check. Ideally use AST parsing.
-                        pass 
-                result = eval(expr, {"__builtins__": {}}, ctx)
-                return "PASS" if result else "FAIL"
+                if op == "equals":
+                    return "PASS" if actual_value == val else "FAIL"
+                elif op == "gte":
+                    return "PASS" if actual_value >= val else "FAIL"
+                elif op == "lte":
+                    return "PASS" if actual_value <= val else "FAIL"
+                elif op == "one_of":
+                    return "PASS" if actual_value in val else "FAIL"
+                elif op == "contains":
+                    # e.g., diagnosis codes list contains specific code
+                    if isinstance(actual_value, list):
+                         return "PASS" if val in actual_value else "FAIL"
+                    return "PASS" if val in str(actual_value) else "FAIL"
+                else:
+                    print(f"Unknown operator: {op}")
+                    return "PEND"
             except Exception as e:
-                print(f"Error evaluating rule: {expr} -> {e}")
+                print(f"Error evaluating condition {cond}: {e}")
                 return "FAIL"
 
         for rule in rules:
-            # Check if we have data for the rule first? 
-            # In this simple engine, we assume logic_expression maps to schema keys
-            
-            status = safe_eval(rule.logic_expression, context)
+            rule_status = "PASS"
+            # AND logic for multiple conditions
+            for cond in rule.conditions:
+                cond_status = evaluate_condition(cond, context)
+                if cond_status == "FAIL":
+                    rule_status = "FAIL"
+                    break
+                if cond_status == "PEND":
+                    rule_status = "PEND"
+                    # Don't break yet, FAIL trumps PEND if a later condition fails
             
             result = EvaluationResult(
                 rule_id=rule.id,
-                status=status,
+                status=rule_status,
                 evidence=f"Patient data: {context}" # Simplified evidence
             )
             results.append(result)
             
-            if status == "FAIL" and rule.required:
+            if rule_status == "FAIL" and rule.required:
                 failed_rules.append(result)
-            elif status == "PEND":
+            elif rule_status == "PEND":
                 missing_info.append(result)
 
         # Aggregation Logic

@@ -16,10 +16,14 @@ class CandidateRule(BaseModel):
     # The inferred rule structure
     rule_data: Rule
 
+from ..llm_utils import LLMInterface, MockLLM
+
 class RuleMiner:
     """
     Mines candidate rules from text chunks using heuristics/ML.
     """
+    def __init__(self, llm: Optional[LLMInterface] = None):
+        self.llm = llm or MockLLM()
     
     def mine_rules(self, chunks: List[Dict[str, Any]]) -> List[CandidateRule]:
         candidates = []
@@ -27,36 +31,31 @@ class RuleMiner:
         for chunk in chunks:
             text = chunk["text"]
             chunk_id = chunk["id"]
-            rule_type = chunk.get("metadata", {}).get("rule_type", "Eligibility")
+            default_rule_type = chunk.get("metadata", {}).get("rule_type", "Eligibility")
             
-            # Simple Heuristic Mining for Prototype
-            # In a real system, this would use BioBERT / LLM
+            # Use LLM (or Mock) to extract rule structure
+            extraction = self.llm.extract_rule(text)
             
-            logic = "manual_review_required"
-            # Demo Heuristic: Detect Age
-            if "years of age or older" in text:
-                import re
-                age_match = re.search(r"(\d+)\s+years", text)
-                if age_match:
-                    age = age_match.group(1)
-                    logic = f"age >= {age}"
-            
-            # Demo Heuristic: Detect Diagnosis
-            if "diagnosis of" in text:
-                 logic = "diagnosis_check_required"
+            # Fallback if extraction is empty or error
+            if not extraction:
+                extraction = {
+                    "rule_type": default_rule_type,
+                    "conditions": [{"parameter": "manual_review", "operator": "equals", "value": True}],
+                    "description": text[:100] + "..."
+                }
 
             candidate = CandidateRule(
                 source_chunk_id=chunk_id,
                 source_text=text,
-                confidence=0.75, # Mock confidence
+                confidence=0.75, # could come from LLM later
                 status="DRAFT",
                 rule_data=Rule(
-                    id=f"R-{uuid.uuid4().hex[:8]}", # Temporary ID
-                    type=rule_type,
-                    logic_expression=logic,
-                    description=text[:100] + "...", # Truncate for description
-                    required=True, # Default
-                    parent_policy_id="UNKNOWN" # To be filled by context
+                    id=f"R-{uuid.uuid4().hex[:8]}", 
+                    type=extraction.get("rule_type", default_rule_type),
+                    conditions=extraction.get("conditions", []),
+                    description=extraction.get("description", text[:100] + "..."), 
+                    required=True, 
+                    parent_policy_id="UNKNOWN" 
                 )
             )
             candidates.append(candidate)

@@ -11,6 +11,7 @@ graph TD
         Processor --> Text[Filtered Text]
         Text --> Chunker[Smart Chunker]
         Chunker -->|Exclusions, Med Necessity...| Mining[Rule Miner]
+        Mining -.->|Extract Logic| LLM[LLM Service]
         Mining --> RegistryDB[(Rule Registry JSON)]
         
         RegistryDB --> ReviewCLI[Review CLI]
@@ -44,7 +45,9 @@ Responsible for transforming unstructured PDF policies into structured, computab
     *   Classifies chunks into types: **Eligibility**, **Medical Necessity**, **Exclusions**, **Documentation**.
 *   **Rule Mining (`mining.py`)**: 
     *   Converts text chunks into "Candidate Rules".
-    *   Proposed Logic: Heuristics or LLM-based extraction.
+    *   **Logic**: Uses `LLMInterface` to extract structured rules.
+        *   `MockLLM`: Heuristic-based (Regex) for testing.
+        *   `OpenAILLM`: GPT-4 based extraction of `rule_type` and `logic_expression`.
 *   **Rule Registry (`registry.py`)**: 
     *   File-based storage (`data/rule_registry.json`) for managing Rule Lifecycle (`DRAFT` -> `APPROVED`).
 *   **Review (`review.py`)**: 
@@ -60,8 +63,10 @@ Responsible for evaluating a specific patient case against the indexed rules.
     *   Retrieves relevant rules from OpenSearch.
     *   Executes `logic_expression` against patient data.
     *   Handles `PEND` status for rules requiring manual review.
-*   **LLM Explainer**: 
-    *   Generates human-readable reasoning for the decision.
+*   **LLM Integration (`src/policy_matcher/llm_utils.py`)**: 
+    *   **Rule Extraction**: Extracts structured logic from policy text (Ingestion Phase).
+    *   **Explainer**: Generates human-readable reasoning for decisions (Runtime Phase).
+    *   Supports swappable backends (`MockLLM`, `OpenAILLM`).
 
 ## Data Flow
 1.  **Ingest**: `run_pipeline.py` -> PDF processed into Draft Rules in Registry.
