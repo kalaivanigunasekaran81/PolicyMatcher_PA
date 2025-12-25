@@ -11,7 +11,7 @@ graph TD
         Processor --> Text[Filtered Text]
         Text --> Chunker[Smart Chunker]
         Chunker -->|Exclusions, Med Necessity...| Mining[Rule Miner]
-        Mining -.->|Extract Logic| LLM[LLM Service]
+        Mining <-->|Extract Logic| LLM[LLM Service]
         Mining --> RegistryDB[(Rule Registry JSON)]
         
         RegistryDB --> ReviewCLI[Review CLI]
@@ -28,6 +28,7 @@ graph TD
         VectorDB -->|Search Relevant Rules| Engine
         Engine -->|Evaluate Logic| Decision[Decision Result]
         Decision --> Explainer[LLM Explainer]
+        Explainer <-->|Generate Explanation| LLM
         Explainer --> FinalResponse[Final JSON Output]
     end
 ```
@@ -45,9 +46,12 @@ Responsible for transforming unstructured PDF policies into structured, computab
     *   Classifies chunks into types: **Eligibility**, **Medical Necessity**, **Exclusions**, **Documentation**.
 *   **Rule Mining (`mining.py`)**: 
     *   Converts text chunks into "Candidate Rules".
-    *   **Logic**: Uses `LLMInterface` to extract structured rules.
-        *   `MockLLM`: Heuristic-based (Regex) for testing.
-        *   `OpenAILLM`: GPT-4 based extraction of `rule_type` and `logic_expression`.
+    *   **Logic**: Uses `LLMInterface` to extract structured rules (`conditions` list).
+        *   **MockLLM**: Heuristic-based (Regex) for testing cost-free.
+        *   **OpenAILLM**: GPT-4 based structured extraction.
+        *   **HuggingFaceLLM**:
+            *   **ClinicalBERT (QA)**: Extractive QA approach (e.g., "What is the age?").
+            *   **BioGPT**: Generative medical text processing.
 *   **Rule Registry (`registry.py`)**: 
     *   File-based storage (`data/rule_registry.json`) for managing Rule Lifecycle (`DRAFT` -> `APPROVED`).
 *   **Review (`review.py`)**: 
@@ -61,12 +65,12 @@ Responsible for evaluating a specific patient case against the indexed rules.
 
 *   **Rule Engine**: 
     *   Retrieves relevant rules from OpenSearch.
-    *   Executes `logic_expression` against patient data.
+    *   Executes structured `conditions` (AND logic) against patient data using safe operator evaluation.
     *   Handles `PEND` status for rules requiring manual review.
 *   **LLM Integration (`src/policy_matcher/llm_utils.py`)**: 
-    *   **Rule Extraction**: Extracts structured logic from policy text (Ingestion Phase).
-    *   **Explainer**: Generates human-readable reasoning for decisions (Runtime Phase).
-    *   Supports swappable backends (`MockLLM`, `OpenAILLM`).
+    *   **Rule Extraction**: Extracts structured logic (`RuleCondition`) from policy text.
+    *   **Explainer**: Generates human-readable reasoning for decisions.
+    *   Supports swappable backends (`MockLLM`, `OpenAILLM`, `HuggingFaceLLM`).
 
 ## Data Flow
 1.  **Ingest**: `run_pipeline.py` -> PDF processed into Draft Rules in Registry.

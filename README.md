@@ -29,7 +29,16 @@ Turn a PDF policy into computable rules.
 **Step 1: Ingest & Mine**
 Process the PDF and generate "Draft" rules in the registry.
 ```bash
-.venv/bin/python -m policy_matcher.run_pipeline --policy "data/Diabetes Mellitus Testing.pdf"
+```bash
+# Default (Mock LLM)
+PYTHONPATH=src python3 -m policy_matcher.run_pipeline --policy "data/Diabetes Mellitus Testing.pdf"
+
+# Medical LLM - ClinicalBERT (QA Extraction)
+PYTHONPATH=src python3 -m policy_matcher.run_pipeline --policy "data/Diabetes Mellitus Testing.pdf" --model clinicalbert
+
+# Medical LLM - BioGPT (Generative Extraction)
+# Requires 'pip install sacremoses'
+PYTHONPATH=src python3 -m policy_matcher.run_pipeline --policy "data/Diabetes Mellitus Testing.pdf" --model biogpt
 ```
 
 **Step 2: Review Rules**
